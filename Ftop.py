@@ -37,6 +37,39 @@ def get_bar(percent, width, color_map):
     bar = "┃" * filled_width + " " * (width - filled_width)
     return bar, color_map['bar']
 
+def format_bytes(n):
+    """Formats bytes into a human-readable string (KB, MB, GB)."""
+    if n is None: return "0 B"
+    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+        if n < 1024:
+            return f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n:.1f} PB"
+
+def draw_sparkline(win, y, x, data, width, title, max_val=100):
+    """Draws a simple sparkline graph, ensuring it fits."""
+    win_height, win_width = win.getmaxyx()
+    win.addstr(y, x, f"{title}: [") # Title can be of variable length
+    if not data:
+        win.addstr(y, x + len(title) + 3, " " * width)
+        win.addstr(y, x + len(title) + 3 + width, "]") # This can go out of bounds
+        return
+    if max_val == 0: max_val = 1 # Avoid division by zero
+
+    spark_chars = " ▂▃▄▅▆▇█"
+
+    graph_str = ""
+    for val in list(data):
+        char_index = min(int(val / max_val * (len(spark_chars) - 1)), len(spark_chars) - 1)
+        graph_str += spark_chars[char_index]
+
+    # Ensure we don't write past the window edge
+    graph_x = x + len(title) + 3
+    closing_bracket_x = graph_x + width
+    if closing_bracket_x < win_width -1:
+        win.addstr(y, graph_x, graph_str)
+        win.addstr(y, closing_bracket_x, "]")
+
 def hex_renderer(hex_win, stop_event, draw_lock):
     """A thread that rapidly generates and draws hex lines to its own window."""
     # Keep a list of the last N lines to fill the window
@@ -87,15 +120,29 @@ def draw_ui(stdscr):
 
     # --- Window Layout ---
     lines, cols = stdscr.getmaxyx()
-    proc_height = (lines - 5) // 2
-    hex_height = lines - 5 - proc_height
+    left_width = cols // 2
+    right_width = cols - left_width
+    
+    hex_height = (lines * 3) // 10
+    metrics_height = lines - hex_height
 
-    proc_win = curses.newwin(proc_height, cols, 5, 0)
-    hex_win = curses.newwin(hex_height, cols, 5 + proc_height, 0)
+    metrics_win = curses.newwin(metrics_height, left_width, 0, 0)
+    hex_win = curses.newwin(hex_height, left_width, metrics_height, 0)
+    proc_win = curses.newwin(lines, right_width, 0, left_width)
 
     # --- Start Hex Thread ---
     hex_thread = threading.Thread(target=hex_renderer, args=(hex_win, stop_event, draw_lock), daemon=True)
     hex_thread.start()
+
+    # --- Network Usage Tracking ---
+    last_net_io = psutil.net_io_counters()
+    last_time = time.time()
+
+    # --- History Tracking ---
+    cpu_history = deque(maxlen=left_width - 18)
+    mem_history = deque(maxlen=left_width - 18)
+    net_up_history = deque(maxlen=left_width - 18)
+    net_down_history = deque(maxlen=left_width - 18)
 
     try:
         while True:
@@ -105,38 +152,118 @@ def draw_ui(stdscr):
                 if stdscr.getch() == curses.KEY_RESIZE:
                     lines, cols = stdscr.getmaxyx()
                     stdscr.clear()
-                    proc_height = (lines - 5) // 2
-                    hex_height = lines - 5 - proc_height
-                    proc_win.resize(proc_height, cols)
-                    hex_win.resize(hex_height, cols)
-                    hex_win.mvwin(5 + proc_height, 0)
+                    
+                    left_width = cols // 2
+                    right_width = cols - left_width
+                    hex_height = (lines * 3) // 10
+                    metrics_height = lines - hex_height
 
-                # --- Header ---
-                header_text = f"Ftop - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                stdscr.addstr(0, (cols - len(header_text)) // 2, header_text, colors['title'])
+                    metrics_win.resize(metrics_height, left_width)
+                    hex_win.resize(hex_height, left_width)
+                    proc_win.resize(lines, right_width)
+
+                    hex_win.mvwin(metrics_height, 0)
+                    proc_win.mvwin(0, left_width)
+                    
+                    # --- Reset History on Resize ---
+                    cpu_history = deque(maxlen=left_width - 18)
+                    mem_history = deque(maxlen=left_width - 18)
+                    net_up_history = deque(maxlen=left_width - 18)
+                    net_down_history = deque(maxlen=left_width - 18)
+                    stdscr.refresh()
 
                 # --- System Metrics ---
+                metrics_win.erase()
+                metrics_win.box()
+                header_text = f" Ftop - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
+                metrics_win.addstr(0, (left_width - len(header_text)) // 2, header_text, colors['title'])
+
                 cpu_percent = psutil.cpu_percent(interval=None)
                 mem_info = psutil.virtual_memory()
-                bar_width = cols - 15
+                swap_info = psutil.swap_memory()
+                load_avg = psutil.getloadavg()
+                disk_info = psutil.disk_usage('/')
+                per_cpu_percent = psutil.cpu_percent(interval=None, percpu=True)
+                cpu_history.append(cpu_percent)
+                mem_history.append(mem_info.percent)
+
+                # --- Network Calculation ---
+                current_net_io = psutil.net_io_counters()
+                current_time = time.time()
+                elapsed_time = current_time - last_time
+                bytes_sent_per_sec = (current_net_io.bytes_sent - last_net_io.bytes_sent) / elapsed_time if elapsed_time > 0 else 0
+                bytes_recv_per_sec = (current_net_io.bytes_recv - last_net_io.bytes_recv) / elapsed_time if elapsed_time > 0 else 0
+                net_up_history.append(bytes_sent_per_sec)
+                net_down_history.append(bytes_recv_per_sec)
+                last_net_io = current_net_io
+                last_time = current_time
+                
+                bar_width = left_width - 18
                 cpu_bar, bar_color = get_bar(cpu_percent, bar_width, colors)
                 mem_bar, _ = get_bar(mem_info.percent, bar_width, colors)
+                swap_bar, _ = get_bar(swap_info.percent, bar_width, colors)
+                disk_bar, _ = get_bar(disk_info.percent, bar_width, colors)
                 
-                stdscr.addstr(2, 0, f"CPU [{cpu_percent:5.1f}%] [")
-                stdscr.addstr(2, 14, cpu_bar, bar_color)
-                stdscr.addstr(2, cols - 1, "]")
+                y = 1
+                metrics_win.addstr(y, 2, f"CPU [{cpu_percent:5.1f}%] ["); y += 1
+                metrics_win.addstr(y-1, 17, cpu_bar, bar_color)
+                metrics_win.addstr(y-1, left_width - 2, "]")
 
-                stdscr.addstr(3, 0, f"MEM [{mem_info.percent:5.1f}%] [")
-                stdscr.addstr(3, 14, mem_bar, bar_color)
-                stdscr.addstr(3, cols - 1, "]")
+                # Per-CPU Bars
+                for i, core_percent in enumerate(per_cpu_percent):
+                    if y >= metrics_height - 8: break # Stop if we run out of space
+                    core_bar, core_color = get_bar(core_percent, bar_width, colors)
+                    metrics_win.addstr(y, 2, f"  {i:<2} [{core_percent:5.1f}%] [")
+                    metrics_win.addstr(y, 17, core_bar, core_color)
+                    metrics_win.addstr(y, left_width - 2, "]")
+                    y += 1
+
+                if y < metrics_height - 7:
+                    mem_text = f"MEM [{mem_info.percent:5.1f}%] [{format_bytes(mem_info.used)}/{format_bytes(mem_info.total)}]"
+                    metrics_win.addstr(y, 2, mem_text); y += 1
+                    metrics_win.addstr(y-1, 17, mem_bar, bar_color)
+                    metrics_win.addstr(y-1, left_width - 2, "]")
+
+                if y < metrics_height - 6:
+                    swap_text = f"SWP [{swap_info.percent:5.1f}%] [{format_bytes(swap_info.used)}/{format_bytes(swap_info.total)}]"
+                    metrics_win.addstr(y, 2, swap_text); y += 1
+                    metrics_win.addstr(y-1, 17, swap_bar, bar_color)
+                    metrics_win.addstr(y-1, left_width - 2, "]")
+
+                if y < metrics_height - 5:
+                    disk_text = f"DSK [{disk_info.percent:5.1f}%] [{format_bytes(disk_info.used)}/{format_bytes(disk_info.total)}]"
+                    metrics_win.addstr(y, 2, disk_text); y += 1
+                    metrics_win.addstr(y-1, 17, disk_bar, bar_color)
+                    metrics_win.addstr(y-1, left_width - 2, "]")
+
+                if y < metrics_height - 4:
+                    draw_sparkline(metrics_win, y, 2, cpu_history, bar_width, "CPU Hist")
+                    y += 1
+
+                if y < metrics_height - 3:
+                    draw_sparkline(metrics_win, y, 2, mem_history, bar_width, "MEM Hist")
+                    y += 1
+
+                if y < metrics_height - 2:
+                    net_max_up = max(max(net_up_history, default=1), 1024)
+                    draw_sparkline(metrics_win, y, 2, net_up_history, bar_width, f"NET Up {format_bytes(net_max_up):>7}/s", max_val=net_max_up)
+                    y += 1
+
+                if y < metrics_height - 2:
+                    net_max_down = max(max(net_down_history, default=1), 1024)
+                    draw_sparkline(metrics_win, y, 2, net_down_history, bar_width, f"NET Dn {format_bytes(net_max_down):>7}/s", max_val=net_max_down)
+                    y += 1
+
+                if y < metrics_height - 1:
+                    metrics_win.addstr(y, 2, f"Load Avg: {load_avg[0]:.2f}, {load_avg[1]:.2f}, {load_avg[2]:.2f}")
 
                 # --- Process Box ---
                 proc_win.erase()
                 proc_win.box()
                 proc_win.addstr(0, 2, " Processes ", colors['title'])
                 proc_header = f"{'PID':>6} {'USER':<12} {'CPU%':>6} {'MEM%':>6} {'COMMAND'}"
-                proc_win.addstr(1, 2, proc_header[:cols-3])
-                proc_win.addstr(2, 1, "─" * (cols - 2))
+                proc_win.addstr(1, 2, proc_header[:right_width-3])
+                proc_win.addstr(2, 1, "─" * (right_width - 2))
 
                 processes = []
                 for proc in psutil.process_iter(['pid', 'name', 'username', 'cpu_percent', 'memory_percent']):
@@ -146,16 +273,16 @@ def draw_ui(stdscr):
                         pass
                 top_processes = sorted(processes, key=lambda p: p.get('cpu_percent', 0), reverse=True)
 
-                for i in range(proc_height - 4):
+                for i in range(lines - 4):
                     if i >= len(top_processes): break
                     p = top_processes[i]
                     user = str(p.get('username', 'N/A'))
                     command = p.get('name', 'N/A')
                     line_str = f"{p.get('pid', ''):>6} {user:<12.12} {p.get('cpu_percent', 0):>6.1f} {p.get('memory_percent', 0):>6.1f} {command}"
-                    proc_win.addstr(i + 3, 2, line_str[:cols-3])
+                    proc_win.addstr(i + 3, 2, line_str[:right_width-3])
 
-                # Refresh main screen and process window
-                stdscr.refresh()
+                # Refresh windows
+                metrics_win.refresh()
                 proc_win.refresh()
 
             time.sleep(1) # Main loop refresh rate
