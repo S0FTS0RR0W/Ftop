@@ -11,6 +11,7 @@ from collections import deque
 from datetime import datetime
 import platform
 import hex  # Import the hex module
+import re
 import psutil
 
 def signal_handler(sig, frame):
@@ -70,24 +71,24 @@ def draw_sparkline(win, y, x, data, width, title, max_val=100.0):
 
     # Braille-based sparkline
     braille_dots = [[0, 0] for _ in range(width)]
-    data_points = list(data)
-    for i in range(width):
-        # Map data points to the available graph width
-        data_idx_start = int(i * len(data_points) / width)
-        data_idx_end = int((i + 1) * len(data_points) / width)
-        if data_idx_start >= data_idx_end: continue
+    data_points = list(data) # Create a list for index access
+    num_data_points = len(data_points)
 
-        # Get the max value for this horizontal slice
-        max_point_in_slice = max(data_points[data_idx_start:data_idx_end])
+    for i in range(width):
+        # Map the data point to the current graph column
+        data_idx = int(i * num_data_points / width)
+        if data_idx >= num_data_points: continue
+
+        val = data_points[data_idx]
         
         # Map the value to the 4 vertical dots in a braille character
-        dot_level = int((max_point_in_slice / max_val) * 4)
+        dot_level = int((val / max_val) * 4)
         
         # Set the braille dots from the bottom up
-        if dot_level > 0: braille_dots[i][0] |= 0x40 # Dot 7
-        if dot_level > 1: braille_dots[i][0] |= 0x04 # Dot 3
-        if dot_level > 2: braille_dots[i][0] |= 0x02 # Dot 2
-        if dot_level > 3: braille_dots[i][0] |= 0x01 # Dot 1
+        if dot_level > 0: braille_dots[i][0] |= 0x40  # Dot 7
+        if dot_level > 1: braille_dots[i][0] |= 0x04  # Dot 3
+        if dot_level > 2: braille_dots[i][0] |= 0x02  # Dot 2
+        if dot_level > 3: braille_dots[i][0] |= 0x01  # Dot 1
 
     graph_str = ''.join([chr(0x2800 + d[0] + d[1]) for d in braille_dots])
     
@@ -99,15 +100,13 @@ def hex_renderer(hex_win, stop_event, draw_lock):
     # Keep a list of the last N lines to fill the window
     win_height, win_width = hex_win.getmaxyx()
     hex_lines = deque(maxlen=win_height - 2)
+    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
     slow_mode_lines_left = 0
 
     while not stop_event.is_set():
-        # The hex module returns strings with ANSI color codes, which curses can't handle.
-        # We need a version that returns raw text.
-        # For now, let's strip them out. A better fix would be to modify hex.py.
         raw_hex_line = hex.generate_hex_line()
-        # A simple way to strip ANSI codes
-        clean_hex_line = ''.join(filter(lambda x: 31 < ord(x) < 127, raw_hex_line.replace('\033[92m', '').replace('\033[32m', '').replace('\033[38;5;22m', '').replace('\033[0m', '')))
+        # Use regex to efficiently strip all ANSI escape codes
+        clean_hex_line = ansi_escape.sub('', raw_hex_line)
         
         hex_lines.append(clean_hex_line)
 
@@ -256,12 +255,12 @@ def draw_ui(stdscr):
                 header_text = f" Ftop - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
                 metrics_win.addstr(0, (left_width - len(header_text)) // 2, header_text, colors['title'])
 
-                cpu_percent = psutil.cpu_percent(interval=None)
+                per_cpu_percent = psutil.cpu_percent(interval=None, percpu=True)
+                cpu_percent = sum(per_cpu_percent) / len(per_cpu_percent)
                 mem_info = psutil.virtual_memory()
                 swap_info = psutil.swap_memory()
                 load_avg = psutil.getloadavg()
                 disk_info = psutil.disk_usage('/')
-                per_cpu_percent = psutil.cpu_percent(interval=None, percpu=True)
                 cpu_history.append(cpu_percent)
                 mem_history.append(mem_info.percent)
 
