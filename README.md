@@ -1,35 +1,38 @@
 # Ftop
 
-A customizable, `btop`-inspired system monitor written in Python, featuring a retro hex dump aesthetic. It provides a live look at system metrics and processes within a clean, boxed terminal interface.
+Because apparently btop wasn’t dramatic enough, here’s Ftop: a Python system monitor with a retro hex dump aesthetic that screams “I’m watching you, CPU”. It’s like Task Manager, but with more attitude and fewer excuses.
 
-*(Screenshot placeholder)*
+(Screenshot placeholder, because screenshots are for people who don’t trust words.)
 
 ## Features
 
--   **Live System Metrics:** Real-time display of CPU and Memory utilization with graphical bars.
--   **Process List:** A view of running processes, sorted by CPU usage, showing PID, User, CPU%, and Memory%.
--   **Independent Hex Dump:** A decorative, animated hex dump runs in a separate thread, providing a dynamic background without impacting the performance of metric updates.
--   **Dynamic "Thinking" Animation:** The hex dump randomly slows down, pauses, and speeds up to create a "thinking" or "processing" effect.
--   **Flicker-Free UI:** Built with Python's `curses` library for a smooth, flicker-free terminal interface with distinct boxes for different components.
--   **Responsive Layout:** The UI components resize gracefully with the terminal window.
+Live System Metrics: Watch your CPU and RAM cry in real time, complete with bars that pretend they’re graphs.
+
+Process List: A parade of processes sorted by CPU usage, so you can finally see which Chrome tab is ruining your life.
+
+Independent Hex Dump: A pointless but beautiful animated hex dump running in its own thread. It does nothing useful, but it looks like your terminal is thinking deep thoughts.
+
+Dynamic "Thinking" Animation: Sometimes the hex dump slows down, pauses, or speeds up—because even your monitor deserves mood swings.
+
+Flicker-Free UI: Built with Python’s curses library, so you can stare at boxes without feeling like you’re in a strobe-lit nightmare.
+
+Responsive Layout: Resize your terminal and watch the UI gracefully adapt, unlike your last relationship.
 
 ## Requirements
+Python 3 (because Python 2 is basically a fossil)
 
--   Python 3
--   The `psutil` library
+The psutil library (aka the only reason this thing knows what your CPU is doing)
 
 ## Installation
+Clone the repo (or download the files if you’re allergic to git).
 
-1.  Clone the repository (or download the files).
-2.  Install the required Python package:
-    ```bash
-    pip install psutil
-    ```
+Install the required Python package:
+
+bash
+pip install psutil
 
 ## Usage
-
-To run the application, simply execute the `Ftop.py` script from your terminal:
-
+Run the script like you mean it:
 ```bash
 python3 Ftop.py
 ```
