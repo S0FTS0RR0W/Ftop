@@ -9,6 +9,7 @@ import random
 import curses
 from collections import deque
 from datetime import datetime
+import platform
 import hex  # Import the hex module
 import psutil
 
@@ -46,29 +47,52 @@ def format_bytes(n):
         n /= 1024
     return f"{n:.1f} PB"
 
-def draw_sparkline(win, y, x, data, width, title, max_val=100):
+def draw_sparkline(win, y, x, data, width, title, max_val=100.0):
     """Draws a simple sparkline graph, ensuring it fits."""
     win_height, win_width = win.getmaxyx()
     win.addstr(y, x, f"{title}: [") # Title can be of variable length
-    if not data:
-        win.addstr(y, x + len(title) + 3, " " * width)
-        win.addstr(y, x + len(title) + 3 + width, "]") # This can go out of bounds
+
+    # Calculate available space for the graph itself
+    graph_start_x = x + len(title) + 3
+    closing_bracket_x = graph_start_x + width
+
+    # Check if the entire sparkline (including title and brackets) fits
+    if closing_bracket_x >= win_width -1:
+        # If it doesn't fit, don't draw the graph part to avoid crashing
         return
-    if max_val == 0: max_val = 1 # Avoid division by zero
 
-    spark_chars = " ▂▃▄▅▆▇█"
-
-    graph_str = ""
-    for val in list(data):
-        char_index = min(int(val / max_val * (len(spark_chars) - 1)), len(spark_chars) - 1)
-        graph_str += spark_chars[char_index]
-
-    # Ensure we don't write past the window edge
-    graph_x = x + len(title) + 3
-    closing_bracket_x = graph_x + width
-    if closing_bracket_x < win_width -1:
-        win.addstr(y, graph_x, graph_str)
+    if not data:
+        win.addstr(y, graph_start_x, " " * width)
         win.addstr(y, closing_bracket_x, "]")
+        return
+
+    if max_val == 0: max_val = 100.0
+
+    # Braille-based sparkline
+    braille_dots = [[0, 0] for _ in range(width)]
+    data_points = list(data)
+    for i in range(width):
+        # Map data points to the available graph width
+        data_idx_start = int(i * len(data_points) / width)
+        data_idx_end = int((i + 1) * len(data_points) / width)
+        if data_idx_start >= data_idx_end: continue
+
+        # Get the max value for this horizontal slice
+        max_point_in_slice = max(data_points[data_idx_start:data_idx_end])
+        
+        # Map the value to the 4 vertical dots in a braille character
+        dot_level = int((max_point_in_slice / max_val) * 4)
+        
+        # Set the braille dots from the bottom up
+        if dot_level > 0: braille_dots[i][0] |= 0x40 # Dot 7
+        if dot_level > 1: braille_dots[i][0] |= 0x04 # Dot 3
+        if dot_level > 2: braille_dots[i][0] |= 0x02 # Dot 2
+        if dot_level > 3: braille_dots[i][0] |= 0x01 # Dot 1
+
+    graph_str = ''.join([chr(0x2800 + d[0] + d[1]) for d in braille_dots])
+    
+    win.addstr(y, graph_start_x, graph_str)
+    win.addstr(y, closing_bracket_x, "]")
 
 def hex_renderer(hex_win, stop_event, draw_lock):
     """A thread that rapidly generates and draws hex lines to its own window."""
@@ -110,6 +134,52 @@ def hex_renderer(hex_win, stop_event, draw_lock):
         else:
             time.sleep(random.uniform(0.001, 0.01)) # Regular fast speed
 
+def get_logo():
+    """Returns an ASCII logo based on the operating system."""
+    system = platform.system()
+    logos = {
+        "Linux": [
+            "    .--.    ",
+            "   |o_o |   ",
+            "   |:_/ |   ",
+            "  //   \\ \\  ",
+            " (|     | ) ",
+            "/'\\_   _/'\\ ",
+            "\\___)=(___/"
+        ],
+        # Add other OS logos here if you like
+    }
+    # Return the logo for the current system, or a default if not found
+    return logos.get(system, logos.get("Linux", []))
+
+
+def draw_fastfetch(win, colors):
+    """Draws system information, like fastfetch."""
+    win.erase()
+    win.box()
+    win.addstr(0, 2, " System ", colors['title'])
+    
+    uname = platform.uname()
+    boot_time = datetime.fromtimestamp(psutil.boot_time())
+    uptime = datetime.now() - boot_time
+    
+    # Format uptime string
+    days = uptime.days
+    hours, remainder = divmod(uptime.seconds, 3600)
+    minutes, _ = divmod(remainder, 60)
+    uptime_str = f"{days}d {hours}h {minutes}m"
+
+    logo = get_logo()
+    logo_width = max(len(line) for line in logo) if logo else 0
+    
+    for i, line in enumerate(logo):
+        win.addstr(i + 1, 2, line, colors['title'])
+
+    win.addstr(2, logo_width + 4, f"OS:      {uname.system} {uname.release}")
+    win.addstr(3, logo_width + 4, f"Kernel:  {uname.version.split(' ')[0]}")
+    win.addstr(4, logo_width + 4, f"Uptime:  {uptime_str}")
+    win.addstr(5, logo_width + 4, f"CPU:     {platform.processor()}")
+
 def draw_ui(stdscr):
     """Main drawing function managed by curses."""
     curses.curs_set(0)
@@ -122,13 +192,15 @@ def draw_ui(stdscr):
     lines, cols = stdscr.getmaxyx()
     left_width = cols // 2
     right_width = cols - left_width
-    
-    hex_height = (lines * 3) // 10
-    metrics_height = lines - hex_height
 
-    metrics_win = curses.newwin(metrics_height, left_width, 0, 0)
-    hex_win = curses.newwin(hex_height, left_width, metrics_height, 0)
+    fastfetch_height = 8
+    hex_height = (lines * 3) // 10
+    metrics_height = lines - hex_height - fastfetch_height
+
+    fastfetch_win = curses.newwin(fastfetch_height, left_width, 0, 0)
+    metrics_win = curses.newwin(metrics_height, left_width, fastfetch_height, 0)
     proc_win = curses.newwin(lines, right_width, 0, left_width)
+    hex_win = curses.newwin(hex_height, left_width, fastfetch_height + metrics_height, 0)
 
     # --- Start Hex Thread ---
     hex_thread = threading.Thread(target=hex_renderer, args=(hex_win, stop_event, draw_lock), daemon=True)
@@ -155,14 +227,17 @@ def draw_ui(stdscr):
                     
                     left_width = cols // 2
                     right_width = cols - left_width
+                    fastfetch_height = 8
                     hex_height = (lines * 3) // 10
-                    metrics_height = lines - hex_height
+                    metrics_height = lines - hex_height - fastfetch_height
 
+                    fastfetch_win.resize(fastfetch_height, left_width)
                     metrics_win.resize(metrics_height, left_width)
                     hex_win.resize(hex_height, left_width)
                     proc_win.resize(lines, right_width)
 
-                    hex_win.mvwin(metrics_height, 0)
+                    metrics_win.mvwin(fastfetch_height, 0)
+                    hex_win.mvwin(fastfetch_height + metrics_height, 0)
                     proc_win.mvwin(0, left_width)
                     
                     # --- Reset History on Resize ---
@@ -171,6 +246,9 @@ def draw_ui(stdscr):
                     net_up_history = deque(maxlen=left_width - 18)
                     net_down_history = deque(maxlen=left_width - 18)
                     stdscr.refresh()
+
+                # --- Fastfetch Info ---
+                draw_fastfetch(fastfetch_win, colors)
 
                 # --- System Metrics ---
                 metrics_win.erase()
@@ -282,6 +360,7 @@ def draw_ui(stdscr):
                     proc_win.addstr(i + 3, 2, line_str[:right_width-3])
 
                 # Refresh windows
+                fastfetch_win.refresh()
                 metrics_win.refresh()
                 proc_win.refresh()
 
